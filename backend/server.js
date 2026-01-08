@@ -51,5 +51,10 @@ app.use("/api/certificates", require("./routes/certificates"));
 app.use("/api/admin", require("./routes/admin_lessons"));
 app.use("/api/admin", require("./routes/admin_exams"));
 
-const port = Number(process.env.PORT || 4000);
-app.listen(port, () => console.log(`API running on port ${port}`));
+const PORT = process.env.PORT || 4000;
+
+app.listen(PORT, () => {
+  console.log(`API running on port ${PORT}`);
+});
+
+
