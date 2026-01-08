@@ -1,3 +1,14 @@
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
+});
+
+console.log("Booting API. NODE_ENV =", process.env.NODE_ENV);
+console.log("Has DATABASE_URL =", !!process.env.DATABASE_URL);
+console.log("PORT from env =", process.env.PORT);
+
 require("dotenv").config();
 const express = require("express");
 const session = require("express-session");
@@ -51,10 +62,9 @@ app.use("/api/certificates", require("./routes/certificates"));
 app.use("/api/admin", require("./routes/admin_lessons"));
 app.use("/api/admin", require("./routes/admin_exams"));
 
+// more natural
 const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
-
-
