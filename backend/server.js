@@ -1,5 +1,3 @@
-const requireLogin = require("./middleware/requireLogin");
-const requireAdmin = require("./middleware/requireAdmin");
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
@@ -12,6 +10,10 @@ console.log("Has DATABASE_URL =", !!process.env.DATABASE_URL);
 console.log("PORT from env =", process.env.PORT);
 
 require("dotenv").config();
+
+const requireLogin = require("./middleware/requireLogin");
+const requireAdmin = require("./middleware/requireAdmin");
+
 const express = require("express");
 const session = require("express-session");
 const pgSession = require("connect-pg-simple")(session);
@@ -65,16 +67,19 @@ app.use(session({
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
+// PUBLIC
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/courses", require("./routes/courses"));
 app.use("/api/lessons", require("./routes/lessons"));
-app.use("/api/progress", require("./routes/progress"));
-app.use("/api/exams", require("./routes/exams"));
-app.use("/api/certificates", require("./routes/certificates"));
 
-// admin routers share same prefix
-app.use("/api/admin", require("./routes/admin_lessons"));
-app.use("/api/admin", require("./routes/admin_exams"));
+// STUDENT (logged-in)
+app.use("/api/progress", requireLogin, require("./routes/progress"));
+app.use("/api/exams", requireLogin, require("./routes/exams"));
+app.use("/api/certificates", requireLogin, require("./routes/certificates"));
+
+// ADMIN ONLY
+app.use("/api/admin/lessons", requireAdmin, require("./routes/admin_lessons"));
+app.use("/api/admin/exams", requireAdmin, require("./routes/admin_exams"));
 
 // more natural
 const PORT = process.env.PORT || 4000;
@@ -82,5 +87,6 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
+
 
 
