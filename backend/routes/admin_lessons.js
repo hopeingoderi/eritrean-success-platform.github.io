@@ -10,7 +10,7 @@ const router = express.Router();
  * Example:
  *  /api/admin/lessons/1
  */
-router.get("/:courseId", async (req, res) => {
+router.get("/lessons/:courseId", requireAdmin, async (req, res) => {
   try {
     const courseId = Number(req.params.courseId);
     if (!Number.isFinite(courseId)) {
@@ -43,4 +43,5 @@ router.get("/", (req, res) => {
 module.exports = router;
 
 module.exports = router;
+
 
