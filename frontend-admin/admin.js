@@ -228,9 +228,11 @@ async function renderLessons() {
   };
 
   // auto-load
-  await loadLessonsList();
-  renderLessonsList();
-  renderLessonEditor(null);
+// auto-load when entering page
+state.selectedCourse = courseSelect.value;
+await loadLessonsList();
+renderLessonsList();
+renderLessonEditor(null);
 }
 
 async function loadLessonsList() {
@@ -555,3 +557,4 @@ async function saveExam() {
   if (!location.hash) setHash("#/login");
   render();
 })();
+
