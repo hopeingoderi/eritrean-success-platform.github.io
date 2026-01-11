@@ -78,8 +78,9 @@ app.use("/api/exams", requireLogin, require("./routes/exams"));
 app.use("/api/certificates", requireLogin, require("./routes/certificates"));
 
 // ADMIN ONLY
-app.use("/api/admin/lessons", requireAdmin, require("./routes/admin_lessons"));
-app.use("/api/admin/exams", requireAdmin, require("./routes/admin_exams"));
+// ADMIN ONLY
+app.use("/api/admin", requireAdmin, require("./routes/admin_lessons"));
+app.use("/api/admin", requireAdmin, require("./routes/admin_exams"));
 
 // more natural
 const PORT = process.env.PORT || 4000;
@@ -87,6 +88,7 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
+
 
 
 
