@@ -5,30 +5,56 @@ const requireAdmin = require("../middleware/requireAdmin");
 
 const router = express.Router();
 
-/* ================= STUDENT LESSONS ================= */
+function quizSafe(quiz) {
+  if (quiz && typeof quiz === "object") return quiz;
+  return { questions: [] };
+}
+
+/* ================= STUDENT LESSONS =================
+   GET /api/lessons/:courseId?lang=en|ti
+*/
 router.get("/:courseId", requireAuth, async (req, res) => {
-  const { courseId } = req.params;
-  const lang = req.query.lang === "ti" ? "ti" : "en";
+  try {
+    const { courseId } = req.params;
+    const lang = req.query.lang === "ti" ? "ti" : "en";
 
-  const r = await query(
-    `SELECT lesson_index,
-            title_${lang} AS title,
-            learn_${lang} AS learnText,
-            task_${lang} AS task,
-            quiz
-     FROM lessons
-     WHERE course_id=$1
-     ORDER BY lesson_index`,
-    [courseId]
-  );
+    // Ensure quiz is never null: COALESCE to {"questions":[]}
+    const r = await query(
+      `SELECT
+          lesson_index,
+          title_${lang} AS title,
+          learn_${lang} AS "learnText",
+          task_${lang} AS task,
+          COALESCE(quiz, '{"questions":[]}'::jsonb) AS quiz
+       FROM lessons
+       WHERE course_id=$1
+       ORDER BY lesson_index`,
+      [courseId]
+    );
 
-  res.json({ lessons: r.rows });
+    // Convert lesson_index -> lessonIndex for frontend
+    const lessons = r.rows.map(row => ({
+      lessonIndex: row.lesson_index,
+      title: row.title,
+      learnText: row.learnText,
+      task: row.task,
+      quiz: quizSafe(row.quiz)
+    }));
+
+    res.json({ lessons });
+  } catch (err) {
+    console.error("STUDENT LESSONS ERROR:", err);
+    res.status(500).json({ error: "Failed to load lessons" });
+  }
 });
 
-/* ================= ADMIN SAVE LESSON ================= */
+/* ================= ADMIN SAVE LESSON =================
+   POST /api/lessons/lesson/save  (NOTE: keep if you still use it)
+   (Recommended: admin routes should live under /api/admin, but we keep yours.)
+*/
 router.post("/lesson/save", requireAdmin, async (req, res) => {
   try {
-    const {
+    let {
       id,
       courseId,
       lessonIndex,
@@ -45,8 +71,9 @@ router.post("/lesson/save", requireAdmin, async (req, res) => {
       return res.status(400).json({ error: "Missing courseId or lessonIndex" });
     }
 
+    const q = quizSafe(quiz);
+
     if (id) {
-      // UPDATE
       await query(
         `UPDATE lessons SET
           course_id=$1,
@@ -68,12 +95,11 @@ router.post("/lesson/save", requireAdmin, async (req, res) => {
           learn_ti,
           task_en,
           task_ti,
-          quiz,
+          q,
           id
         ]
       );
     } else {
-      // INSERT
       await query(
         `INSERT INTO lessons
           (course_id, lesson_index, title_en, title_ti,
@@ -88,7 +114,7 @@ router.post("/lesson/save", requireAdmin, async (req, res) => {
           learn_ti,
           task_en,
           task_ti,
-          quiz
+          q
         ]
       );
     }
