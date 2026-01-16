@@ -1,14 +1,22 @@
+// frontend-admin/admin.js
+// ============================================================
+// Admin Panel (Frontend) — uses STRING course IDs everywhere
+// Fixes:
+// 1) courseId is ALWAYS "foundation" | "growth" | "excellence" (never 1/2/3)
+// 2) Renames confusing variables: courseIdNum -> courseId
+// 3) Adds quizSafe fallback on the frontend (prevents null/invalid quiz)
+// 4) Exams also use string courseId
+// ============================================================
+
 // ================= CONFIG =================
 // PRODUCTION (Render backend)
 const API_BASE = "https://eritrean-success-backend.onrender.com/api";
-// Example: const API_BASE = "https://YOUR-SERVICE.onrender.com/api";
 
 const appEl = document.getElementById("app");
 document.getElementById("year").textContent = new Date().getFullYear();
-
 const logoutBtn = document.getElementById("logoutBtn");
 
-// Course key -> numeric course id in DB
+// Use string course IDs everywhere
 const COURSE_ID_BY_KEY = {
   foundation: "foundation",
   growth: "growth",
@@ -47,6 +55,13 @@ async function api(path, { method = "GET", body } = {}) {
 }
 
 function setHash(h) { location.hash = h; }
+
+// Small helper to ensure quiz is always an object with questions[]
+function normalizeQuiz(quiz) {
+  if (quiz && typeof quiz === "object" && Array.isArray(quiz.questions)) return quiz;
+  if (quiz && typeof quiz === "object") return { questions: Array.isArray(quiz.questions) ? quiz.questions : [] };
+  return { questions: [] };
+}
 
 // ================= STATE =================
 let state = {
@@ -227,7 +242,8 @@ async function renderLessons() {
     renderLessonEditor(null);
   };
 
-  // auto-load
+  // auto-load on enter
+  state.selectedCourse = courseSelect.value;
   await loadLessonsList();
   renderLessonsList();
   renderLessonEditor(null);
@@ -238,10 +254,10 @@ async function loadLessonsList() {
   msg.textContent = " Loading...";
 
   try {
-    const courseIdNum = COURSE_ID_BY_KEY[state.selectedCourse];
-    if (!courseIdNum) throw new Error("Unknown course: " + state.selectedCourse);
+    const courseId = COURSE_ID_BY_KEY[state.selectedCourse]; // ✅ string
+    if (!courseId) throw new Error("Unknown course: " + state.selectedCourse);
 
-    const r = await api(`/admin/lessons/${courseIdNum}`);
+    const r = await api(`/admin/lessons/${courseId}`); // ✅ string in URL
     state.lessons = r.lessons || [];
     msg.textContent = ` Loaded ✅ (${state.lessons.length})`;
   } catch (e) {
@@ -364,7 +380,8 @@ function renderLessonEditor(lesson) {
   document.getElementById("editCourseKey").value = courseKey;
 
   if (isEdit) {
-    hydrateLessonFields(COURSE_ID_BY_KEY[courseKey], lesson.lesson_index).catch(() => {});
+    const courseId = COURSE_ID_BY_KEY[courseKey]; // ✅ string
+    hydrateLessonFields(courseId, lesson.lesson_index).catch(() => {});
   } else {
     document.getElementById("learn_en").value = "";
     document.getElementById("learn_ti").value = "";
@@ -378,13 +395,13 @@ function renderLessonEditor(lesson) {
   document.getElementById("saveLessonBtn").onclick = saveLesson;
 }
 
-async function hydrateLessonFields(courseIdNum, lessonIndex) {
+async function hydrateLessonFields(courseId, lessonIndex) {
   // Load EN
-  const r = await api(`/lessons/${courseIdNum}?lang=en`);
+  const r = await api(`/lessons/${courseId}?lang=en`);
   const l = (r.lessons || []).find(x => x.lessonIndex === lessonIndex);
 
   // Load TI
-  const rTi = await api(`/lessons/${courseIdNum}?lang=ti`);
+  const rTi = await api(`/lessons/${courseId}?lang=ti`);
   const lTi = (rTi.lessons || []).find(x => x.lessonIndex === lessonIndex);
 
   if (l) {
@@ -403,8 +420,14 @@ async function saveLesson() {
   msg.textContent = "";
 
   const id = state.editingLessonId;
+
   const courseKey = document.getElementById("editCourseKey").value;
-  const courseIdNum = COURSE_ID_BY_KEY[courseKey];
+  const courseId = COURSE_ID_BY_KEY[courseKey]; // ✅ string ALWAYS
+  if (!courseId) {
+    msg.textContent = "Unknown course selected.";
+    return;
+  }
+
   const lessonIndex = Number(document.getElementById("editLessonIndex").value);
 
   const title_en = document.getElementById("title_en").value.trim();
@@ -422,9 +445,11 @@ async function saveLesson() {
     return;
   }
 
+  const quizSafe = normalizeQuiz(quiz);
+
   const payload = {
     ...(id ? { id } : {}),
-    courseId: courseIdNum,
+    courseId,            // ✅ "foundation" not 1
     lessonIndex,
     title_en,
     title_ti,
@@ -432,7 +457,7 @@ async function saveLesson() {
     learn_ti,
     task_en,
     task_ti,
-    quiz
+    quiz: quizSafe       // ✅ always object with questions[]
   };
 
   try {
@@ -505,12 +530,12 @@ async function renderExams() {
 
 async function loadExam() {
   const courseKey = document.getElementById("examCourseSelect").value;
-  const courseIdNum = COURSE_ID_BY_KEY[courseKey];
+  const courseId = COURSE_ID_BY_KEY[courseKey]; // ✅ string
   const msg = document.getElementById("examMsg");
   msg.textContent = "Loading...";
 
   try {
-    const r = await api(`/admin/exam/${courseIdNum}`);
+    const r = await api(`/admin/exam/${courseId}`);
     document.getElementById("passScore").value = (r.passScore ?? 70);
     document.getElementById("examJsonEn").value = JSON.stringify(r.exam_en || { questions: [] }, null, 2);
     document.getElementById("examJsonTi").value = JSON.stringify(r.exam_ti || { questions: [] }, null, 2);
@@ -523,7 +548,7 @@ async function loadExam() {
 
 async function saveExam() {
   const courseKey = document.getElementById("examCourseSelect").value;
-  const courseIdNum = COURSE_ID_BY_KEY[courseKey];
+  const courseId = COURSE_ID_BY_KEY[courseKey]; // ✅ string
   const msg = document.getElementById("examMsg");
   msg.textContent = "";
 
@@ -541,7 +566,7 @@ async function saveExam() {
   try {
     await api("/admin/exam/save", {
       method: "POST",
-      body: { courseId: courseIdNum, passScore, exam_en, exam_ti }
+      body: { courseId, passScore, exam_en, exam_ti } // ✅ string courseId
     });
     msg.textContent = "Saved ✅";
     state.selectedCourse = courseKey;
@@ -555,5 +580,3 @@ async function saveExam() {
   if (!location.hash) setHash("#/login");
   render();
 })();
-
-
