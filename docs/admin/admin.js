@@ -574,9 +574,13 @@ async function saveExam() {
     msg.textContent = "Save failed: " + e.message;
   }
 }
+// expose functions for inline onclick handlers
+window.renderLessonEditor = renderLessonEditor;
+window.renderLessonsList = renderLessonsList;
 
 // ================= BOOT =================
 (function boot() {
   if (!location.hash) setHash("#/login");
   render();
 })();
+
