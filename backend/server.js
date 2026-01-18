@@ -34,28 +34,35 @@ const isProd = process.env.NODE_ENV === "production";
 
 app.set("trust proxy", 1);
 
+// ✅ ONE CORS ONLY
+const ALLOWED_ORIGINS = new Set([
+  "https://riseeritrea.com",
+  "https://www.riseeritrea.com",
+]);
+
 app.use(cors({
-  origin: [
-    "https://riseeritrea.com",
-    "https://www.riseeritrea.com"
-  ],
+  origin: (origin, cb) => {
+    // allow same-origin / curl / server-to-server (no Origin header)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    return cb(new Error("CORS blocked: " + origin), false);
+  },
   credentials: true
 }));
 
+// ✅ session cookie settings that work on mobile
 app.use(session({
-  name: "esj.sid", // explicit cookie name (important)
-  store: new pgSession({
-    pool,
-    tableName: "session"
-  }),
+  name: "esj.sid",
+  store: new pgSession({ pool, tableName: "session" }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  proxy: true,
   cookie: {
     httpOnly: true,
-    secure: true,                 // REQUIRED for SameSite=None
-    sameSite: "none",             // REQUIRED for subdomains
-    domain: ".riseeritrea.com",   // SHARE across api + frontend
+    secure: isProd,                       // true on Render
+    sameSite: isProd ? "none" : "lax",     // needed for subdomains
+    domain: isProd ? ".riseeritrea.com" : undefined,
     maxAge: 1000 * 60 * 60 * 24 * 14
   }
 }));
@@ -84,4 +91,5 @@ app.listen(PORT, () => {
   console.log("API running on port", PORT);
   console.log("NODE_ENV =", process.env.NODE_ENV);
 });
+
 
