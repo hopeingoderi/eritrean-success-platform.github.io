@@ -58,8 +58,9 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: isProd,
+    secure: isProd,                 // must be true on https
     sameSite: isProd ? "none" : "lax",
+    domain: isProd ? ".riseeritrea.com" : undefined, // ✅ share cookie across subdomains
     maxAge: 1000 * 60 * 60 * 24 * 14
   }
 }));
@@ -87,6 +88,7 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
+
 
 
 
