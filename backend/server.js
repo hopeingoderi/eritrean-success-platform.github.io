@@ -1,19 +1,4 @@
-// server.js (or index.js) — cleaned + mobile-safe for sessions on api.riseeritrea.com
-// ✅ Fixes:
-// - dotenv loaded first
-// - trust proxy enabled for Render
-// - ONLY ONE CORS middleware (no duplicates)
-// - session cookie works across subdomains (.riseeritrea.com) + SameSite=None in production
-// - keeps your existing routes + middleware
-
 require("dotenv").config();
-
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
-process.on("unhandledRejection", (err) => {
-  console.error("UNHANDLED REJECTION:", err);
-});
 
 const express = require("express");
 const session = require("express-session");
@@ -29,59 +14,55 @@ const requireAdmin = require("./middleware/requireAdmin");
 
 const app = express();
 
-/* ================= ENV ================= */
-const isProd = process.env.NODE_ENV === "production";
-
+/* ================= CORE ================= */
 app.set("trust proxy", 1);
+app.use(helmet());
+app.use(rateLimit({ windowMs: 60_000, max: 200 }));
+app.use(express.json({ limit: "1mb" }));
+app.use(cookieParser());
 
-// ✅ ONE CORS ONLY
-const ALLOWED_ORIGINS = new Set([
-  "https://riseeritrea.com",
-  "https://www.riseeritrea.com",
-]);
-
+/* ================= CORS (ONE ONLY) ================= */
 app.use(cors({
-  origin: (origin, cb) => {
-    // allow same-origin / curl / server-to-server (no Origin header)
-    if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
-    return cb(new Error("CORS blocked: " + origin), false);
-  },
+  origin: [
+    "https://riseeritrea.com",
+    "https://www.riseeritrea.com"
+  ],
   credentials: true
 }));
 
-// ✅ session cookie settings that work on mobile
+/* ================= SESSION ================= */
 app.use(session({
-  name: "esj.sid",
-  store: new pgSession({ pool, tableName: "session" }),
+  name: "sid",
+  store: new pgSession({
+    pool,
+    tableName: "session"
+  }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   proxy: true,
   cookie: {
     httpOnly: true,
-    secure: isProd,                       // true on Render
-    sameSite: isProd ? "none" : "lax",     // needed for subdomains
-    domain: isProd ? ".riseeritrea.com" : undefined,
+    secure: true,     // HTTPS REQUIRED
+    sameSite: "none", // cross-domain cookie
     maxAge: 1000 * 60 * 60 * 24 * 14
   }
 }));
+
 /* ================= HEALTH ================= */
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
 
-/* ================= PUBLIC ================= */
+/* ================= ROUTES ================= */
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/courses", require("./routes/courses"));
 app.use("/api/lessons", require("./routes/lessons"));
 
-/* ================= STUDENT (LOGGED IN) ================= */
 app.use("/api/progress", requireLogin, require("./routes/progress"));
 app.use("/api/exams", requireLogin, require("./routes/exams"));
 app.use("/api/certificates", requireLogin, require("./routes/certificates"));
 
-/* ================= ADMIN ================= */
 app.use("/api/admin", requireAdmin, require("./routes/admin_lessons"));
 app.use("/api/admin", requireAdmin, require("./routes/admin_exams"));
 
@@ -89,7 +70,6 @@ app.use("/api/admin", requireAdmin, require("./routes/admin_exams"));
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log("API running on port", PORT);
-  console.log("NODE_ENV =", process.env.NODE_ENV);
 });
 
 
