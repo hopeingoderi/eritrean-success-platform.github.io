@@ -32,19 +32,8 @@ const app = express();
 /* ================= ENV ================= */
 const isProd = process.env.NODE_ENV === "production";
 
-/* ================= TRUST PROXY ================= */
-// REQUIRED for Render + HTTPS cookies
 app.set("trust proxy", 1);
 
-/* ================= SECURITY ================= */
-app.use(helmet());
-app.use(rateLimit({ windowMs: 60_000, max: 200 }));
-
-/* ================= BODY + COOKIES ================= */
-app.use(express.json({ limit: "1mb" }));
-app.use(cookieParser());
-
-/* ================= CORS (ONLY ONCE) ================= */
 app.use(cors({
   origin: [
     "https://riseeritrea.com",
@@ -53,7 +42,6 @@ app.use(cors({
   credentials: true
 }));
 
-/* ================= SESSION ================= */
 app.use(session({
   name: "esj.sid", // explicit cookie name (important)
   store: new pgSession({
@@ -65,18 +53,12 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-
-    // 🔑 REQUIRED for mobile Safari
-    secure: true,
-    sameSite: "none",
-
-    // 🔑 REQUIRED for subdomains (api + www)
-    domain: ".riseeritrea.com",
-
-    maxAge: 1000 * 60 * 60 * 24 * 14 // 14 days
+    secure: true,                 // REQUIRED for SameSite=None
+    sameSite: "none",             // REQUIRED for subdomains
+    domain: ".riseeritrea.com",   // SHARE across api + frontend
+    maxAge: 1000 * 60 * 60 * 24 * 14
   }
 }));
-
 /* ================= HEALTH ================= */
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
@@ -102,3 +84,4 @@ app.listen(PORT, () => {
   console.log("API running on port", PORT);
   console.log("NODE_ENV =", process.env.NODE_ENV);
 });
+
