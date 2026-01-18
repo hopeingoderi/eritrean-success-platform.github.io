@@ -1,3 +1,8 @@
+// routes/auth.js
+// ✅ Fixes mobile/session issues by forcing req.session.save() before responding
+// ✅ Keeps your existing secure session (only {id, role})
+// ✅ Adds same save() fix to register too (important on Safari/iOS)
+
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const { z } = require("zod");
@@ -47,11 +52,17 @@ router.post("/register", async (req, res) => {
 
     const user = r.rows[0];
 
-    // A3-1: store explicit session with role
+    // store explicit session with role
     req.session.user = safeUserSession(user);
 
-    // return safe profile to UI
-    return res.json({ user: safeUserResponse(user) });
+    // ✅ FORCE save session BEFORE responding (fixes mobile/Safari)
+    return req.session.save((err) => {
+      if (err) {
+        console.error("REGISTER SESSION SAVE ERROR:", err);
+        return res.status(500).json({ error: "Session save failed" });
+      }
+      return res.json({ user: safeUserResponse(user) });
+    });
   } catch (err) {
     console.error("REGISTER ERROR:", err);
     return res.status(500).json({ error: "Server error" });
@@ -87,10 +98,17 @@ router.post("/login", async (req, res) => {
     const ok = bcrypt.compareSync(password, u.password_hash);
     if (!ok) return res.status(401).json({ error: "Invalid email or password" });
 
-    // A3-1: store ONLY {id, role} in session
+    // store ONLY {id, role} in session
     req.session.user = safeUserSession(u);
 
-    return res.json({ user: safeUserResponse(u) });
+    // ✅ FORCE save session BEFORE responding (fixes mobile/Safari)
+    return req.session.save((err) => {
+      if (err) {
+        console.error("LOGIN SESSION SAVE ERROR:", err);
+        return res.status(500).json({ error: "Session save failed" });
+      }
+      return res.json({ user: safeUserResponse(u) });
+    });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     return res.status(500).json({ error: "Server error" });
@@ -103,7 +121,8 @@ router.post("/login", async (req, res) => {
 router.post("/logout", (req, res) => {
   // safer: clear cookie after destroy
   req.session.destroy(() => {
-    res.clearCookie("connect.sid"); // default session cookie name
+    // If you changed cookie name in session config, update this name too.
+    res.clearCookie("connect.sid");
     return res.json({ ok: true });
   });
 });
@@ -116,7 +135,7 @@ router.get("/me", async (req, res) => {
     // If not logged in:
     if (!req.session || !req.session.user) return res.json({ user: null });
 
-    // Optional: refresh user profile from DB (keeps name/email updated)
+    // refresh user profile from DB (keeps name/email updated)
     const { id } = req.session.user;
     const r = await query("SELECT id, name, email, role FROM users WHERE id=$1", [id]);
     if (!r.rows.length) return res.json({ user: null });
