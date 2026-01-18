@@ -75,39 +75,41 @@ router.post("/update", requireAuth, async (req, res) => {
   const userId = req.session.user.id;
   const { courseId, lessonIndex, completed, quizScore, reflection } = parsed.data;
 
-  await query(
-    `INSERT INTO progress (
-      user_id, course_id, lesson_index,
-      completed, quiz_score, reflection,
-      reflection_updated_at,
-      updated_at
-    )
-    VALUES ($1,$2,$3,
-      COALESCE($4,false),
-      $5,$6,
-      CASE WHEN $6 IS NOT NULL THEN NOW() ELSE NULL END,
-      NOW()
-    )
-    ON CONFLICT (user_id, course_id, lesson_index) DO UPDATE SET
-      completed = COALESCE($4, progress.completed),
-      quiz_score = COALESCE($5, progress.quiz_score),
-      reflection = COALESCE($6, progress.reflection),
-      reflection_updated_at = CASE
-        WHEN $6 IS NOT NULL THEN NOW()
-        ELSE progress.reflection_updated_at
-      END,
-      updated_at = NOW()`,
-    [
-      userId,
-      courseId,
-      lessonIndex,
-      (typeof completed === "boolean") ? completed : null,
-      (typeof quizScore === "number") ? quizScore : null,
-      (typeof reflection === "string") ? reflection : null
-    ]
-  );
+await query(
+  `INSERT INTO progress (
+    user_id, course_id, lesson_index,
+    completed, quiz_score, reflection,
+    reflection_updated_at,
+    updated_at
+  )
+  VALUES ($1,$2,$3,
+    COALESCE($4,false),
+    $5::int,
+    $6::text,
+    CASE WHEN $6::text IS NOT NULL THEN NOW() ELSE NULL END,
+    NOW()
+  )
+  ON CONFLICT (user_id, course_id, lesson_index) DO UPDATE SET
+    completed = COALESCE($4, progress.completed),
+    quiz_score = COALESCE($5::int, progress.quiz_score),
+    reflection = COALESCE($6::text, progress.reflection),
+    reflection_updated_at = CASE
+      WHEN $6::text IS NOT NULL THEN NOW()
+      ELSE progress.reflection_updated_at
+    END,
+    updated_at = NOW()`,
+  [
+    userId,
+    courseId,
+    lessonIndex,
+    (typeof completed === "boolean") ? completed : null,
+    (typeof quizScore === "number") ? quizScore : null,
+    (typeof reflection === "string") ? reflection : null
+  ]
+);
 
   res.json({ ok: true });
 });
 
 module.exports = router;
+
