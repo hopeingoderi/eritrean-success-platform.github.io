@@ -1,43 +1,43 @@
 // student-frontend/app.js
 // ============================================================
-// Works with your CURRENT index.html:
+// Student Frontend (SPA)
+// Matches your student-frontend/index.html nav:
 //   <button onclick="go('login')">Login</button>
 //   <button onclick="go('register')">Register</button>
 //   <button onclick="logout()">Logout</button>
 //
 // Fixes:
-// - Login/Register/Logout logic (hide/show correctly)
-// - Prevent dashboard if not logged in
-// - Courses not "undefined" (supports title/title_en/title_ti + description/description_en/description_ti)
-// - Sort courses: foundation -> growth -> excellence (by order if provided)
-// - Course page + lesson page (Back/Next/Save & Complete + progress bar)
+// - Correct API_BASE
+// - Courses not "undefined" (maps title_en/title_ti + description_en/description_ti)
+// - Sort courses by order: foundation -> growth -> excellence
+// - Proper Login/Register/Logout visibility
+// - Course page: progress bar + lesson list
+// - Lesson page: Back/Next/Return + Save & Complete
 // ============================================================
 
 const API_BASE = "https://api.riseeritrea.com/api";
 
-// ---------- DOM ----------
+// ---------------- DOM ----------------
 const appEl = document.getElementById("app");
 const navEl = document.getElementById("nav");
 
-// Your nav buttons (by order in index.html)
-const navButtons = navEl ? navEl.querySelectorAll("button") : [];
-const btnLogin = navButtons[0] || null;
-const btnRegister = navButtons[1] || null;
-const btnLogout = navButtons[2] || null;
-
-// ---------- STATE ----------
+// ---------------- STATE ----------------
 const state = {
   user: null,
-  lang: "en",
+  lang: "en", // "en" | "ti"
   courses: [],
-  lessonsByCourse: {},
-  progressByCourse: {}
+  lessonsByCourse: {},   // courseId -> lessons[]
+  progressByCourse: {},  // courseId -> progress object from backend
 };
 
-// ---------- HELPERS ----------
+// ---------------- HELPERS ----------------
 function escapeHtml(str = "") {
   return String(str).replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
   }[m]));
 }
 
@@ -46,71 +46,78 @@ async function api(path, { method = "GET", body } = {}) {
     method,
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: body ? JSON.stringify(body) : undefined
+    body: body ? JSON.stringify(body) : undefined,
   });
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Request failed");
+  if (!res.ok) {
+    throw new Error(typeof data.error === "string" ? data.error : "Request failed");
+  }
   return data;
 }
 
-function setHash(h) {
-  if (location.hash !== h) location.hash = h;
+// Your site uses hashes like "#dashboard" in screenshots.
+// We'll support BOTH "#dashboard" and "#/dashboard".
+function getRouteParts() {
+  const raw = location.hash || "#dashboard";
+  const h = raw.startsWith("#/") ? raw.slice(2) : raw.slice(1);
+  const parts = h.split("/").filter(Boolean);
+  return parts.length ? parts : ["dashboard"];
 }
 
-function routeParts() {
-  return (location.hash || "#/dashboard").replace("#/", "").split("/");
+function setRoute(route) {
+  // keep style "#dashboard"
+  location.hash = "#" + route.replace(/^#?\/?/, "");
 }
 
-function isLoggedIn() {
-  return !!state.user;
+// nav buttons are in index.html but have no IDs; match by text
+function getNavButtons() {
+  const btns = Array.from(navEl?.querySelectorAll("button") || []);
+  const find = (txt) =>
+    btns.find((b) => (b.textContent || "").trim().toLowerCase() === txt);
+  return {
+    login: find("login"),
+    register: find("register"),
+    logout: find("logout"),
+  };
 }
-
-// These 2 functions FIX your current index.html
-window.go = function (page) {
-  setHash(`#/${page}`);
-  render();
-};
-
-window.logout = async function () {
-  try { await api("/auth/logout", { method: "POST" }); } catch {}
-  state.user = null;
-  updateNav();
-  setHash("#/login");
-  render();
-};
 
 function updateNav() {
-  if (!btnLogin || !btnRegister || !btnLogout) return;
+  const { login, register, logout: lo } = getNavButtons();
+  if (!login || !register || !lo) return;
 
   if (state.user) {
-    btnLogin.style.display = "none";
-    btnRegister.style.display = "none";
-    btnLogout.style.display = "inline-block";
+    login.style.display = "none";
+    register.style.display = "none";
+    lo.style.display = "inline-block";
   } else {
-    btnLogin.style.display = "inline-block";
-    btnRegister.style.display = "inline-block";
-    btnLogout.style.display = "none";
+    login.style.display = "inline-block";
+    register.style.display = "inline-block";
+    lo.style.display = "none";
   }
 }
 
-// Robust field reading (prevents "undefined")
-function getCourseTitle(c) {
-  if (!c) return "";
-  if (state.lang === "ti") return c.title_ti || c.title || c.title_en || "";
-  return c.title_en || c.title || c.title_ti || "";
+function courseTitle(c) {
+  if (state.lang === "ti") return c.title_ti || c.title_en || c.title || c.id;
+  return c.title_en || c.title_ti || c.title || c.id;
 }
 
-function getCourseDesc(c) {
-  if (!c) return "";
-  if (state.lang === "ti") return c.description_ti || c.description || c.description_en || "";
-  return c.description_en || c.description || c.description_ti || "";
+function courseDesc(c) {
+  if (state.lang === "ti") return c.description_ti || c.description_en || c.description || "";
+  return c.description_en || c.description_ti || c.description || "";
 }
 
-// ---------- LOADERS ----------
+function progressFor(courseId, lessonIndex) {
+  return state.progressByCourse[courseId]?.byLessonIndex?.[lessonIndex] || {
+    completed: false,
+    reflectionText: "",
+  };
+}
+
+// ---------------- LOADERS ----------------
 async function loadMe() {
   const r = await api("/auth/me");
-  state.user = r.user || null;
+  state.user = r.user;
   updateNav();
 }
 
@@ -118,11 +125,11 @@ async function loadCourses() {
   const r = await api(`/courses?lang=${state.lang}`);
   state.courses = Array.isArray(r.courses) ? r.courses : [];
 
-  // sort by order if exists, else fallback id order
-  const fallbackOrder = { foundation: 1, growth: 2, excellence: 3 };
+  // Sort by 'order' if present, else fallback by known IDs
+  const fallback = { foundation: 1, growth: 2, excellence: 3 };
   state.courses.sort((a, b) => {
-    const ao = (typeof a.order === "number" ? a.order : (fallbackOrder[a.id] || 999));
-    const bo = (typeof b.order === "number" ? b.order : (fallbackOrder[b.id] || 999));
+    const ao = (typeof a.order === "number") ? a.order : (fallback[a.id] || 999);
+    const bo = (typeof b.order === "number") ? b.order : (fallback[b.id] || 999);
     return ao - bo;
   });
 }
@@ -137,25 +144,25 @@ async function loadProgress(courseId) {
   state.progressByCourse[courseId] = r || {};
 }
 
-function getLessonProgress(courseId, lessonIndex) {
-  const p = state.progressByCourse[courseId]?.byLessonIndex?.[lessonIndex];
-  return p || { completed: false, reflectionText: "" };
-}
-
-// ---------- RENDER ----------
+// ---------------- RENDER ----------------
 async function render() {
-  // ALWAYS refresh auth state first
-  try { await loadMe(); } catch { state.user = null; updateNav(); }
+  // Always try load /me first
+  try {
+    await loadMe();
+  } catch {
+    state.user = null;
+    updateNav();
+  }
 
-  const parts = routeParts();
-  const page = parts[0] || "dashboard";
+  const parts = getRouteParts();
+  const page = parts[0];
 
   if (page === "login") return renderLogin();
   if (page === "register") return renderRegister();
 
   // Protected pages
-  if (!isLoggedIn()) {
-    setHash("#/login");
+  if (!state.user) {
+    setRoute("login");
     return renderLogin();
   }
 
@@ -163,11 +170,11 @@ async function render() {
   if (page === "course") return renderCourse(parts[1]);
   if (page === "lesson") return renderLesson(parts[1], parts[2]);
 
-  setHash("#/dashboard");
+  setRoute("dashboard");
   return renderDashboard();
 }
 
-// ---------- LOGIN ----------
+// ---------------- PAGES ----------------
 function renderLogin() {
   appEl.innerHTML = `
     <div class="card">
@@ -181,6 +188,7 @@ function renderLogin() {
 
       <div style="height:12px"></div>
       <button class="btn primary" id="loginBtn">Login</button>
+
       <div class="small" id="msg" style="margin-top:10px"></div>
     </div>
   `;
@@ -192,10 +200,13 @@ function renderLogin() {
     msg.textContent = "";
 
     try {
-      const r = await api("/auth/login", { method: "POST", body: { email, password } });
+      const r = await api("/auth/login", {
+        method: "POST",
+        body: { email, password },
+      });
       state.user = r.user;
       updateNav();
-      setHash("#/dashboard");
+      setRoute("dashboard");
       render();
     } catch (e) {
       msg.textContent = "Login failed: " + e.message;
@@ -203,7 +214,6 @@ function renderLogin() {
   };
 }
 
-// ---------- REGISTER ----------
 function renderRegister() {
   appEl.innerHTML = `
     <div class="card">
@@ -220,6 +230,7 @@ function renderRegister() {
 
       <div style="height:12px"></div>
       <button class="btn primary" id="regBtn">Create account</button>
+
       <div class="small" id="msg" style="margin-top:10px"></div>
     </div>
   `;
@@ -232,10 +243,13 @@ function renderRegister() {
     msg.textContent = "";
 
     try {
-      const r = await api("/auth/register", { method: "POST", body: { name, email, password } });
+      const r = await api("/auth/register", {
+        method: "POST",
+        body: { name, email, password },
+      });
       state.user = r.user;
       updateNav();
-      setHash("#/dashboard");
+      setRoute("dashboard");
       render();
     } catch (e) {
       msg.textContent = "Register failed: " + e.message;
@@ -243,11 +257,10 @@ function renderRegister() {
   };
 }
 
-// ---------- DASHBOARD ----------
 async function renderDashboard() {
   appEl.innerHTML = `
     <div class="card">
-      <div class="row" style="justify-content:space-between;align-items:center;">
+      <div class="row">
         <div>
           <div class="h1">Your Levels</div>
           <div class="small">Welcome, <b>${escapeHtml(state.user?.name || "")}</b></div>
@@ -258,6 +271,7 @@ async function renderDashboard() {
         </div>
       </div>
     </div>
+
     <div id="coursesWrap"></div>
   `;
 
@@ -272,20 +286,18 @@ async function renderDashboard() {
     renderDashboard();
   };
 
+  const wrap = document.getElementById("coursesWrap");
   try {
     await loadCourses();
   } catch (e) {
-    document.getElementById("coursesWrap").innerHTML =
-      `<div class="card"><div class="small">Failed to load courses: ${escapeHtml(e.message)}</div></div>`;
+    wrap.innerHTML = `<div class="card"><div class="small">Failed to load courses: ${escapeHtml(e.message)}</div></div>`;
     return;
   }
 
-  const wrap = document.getElementById("coursesWrap");
-
-  wrap.innerHTML = (state.courses.length ? state.courses : []).map(c => `
+  wrap.innerHTML = state.courses.map(c => `
     <div class="card">
-      <div class="h2">${escapeHtml(getCourseTitle(c))}</div>
-      <div class="p">${escapeHtml(getCourseDesc(c))}</div>
+      <div class="h2">${escapeHtml(courseTitle(c))}</div>
+      <div class="p">${escapeHtml(courseDesc(c))}</div>
       <button class="btn primary" data-open="${escapeHtml(c.id)}">Open</button>
     </div>
   `).join("") || `<div class="card"><div class="small">No courses found.</div></div>`;
@@ -293,19 +305,21 @@ async function renderDashboard() {
   wrap.querySelectorAll("[data-open]").forEach(btn => {
     btn.onclick = () => {
       const id = btn.getAttribute("data-open");
-      setHash(`#/course/${id}`);
+      setRoute(`course/${id}`);
       render();
     };
   });
 }
 
-// ---------- COURSE ----------
 async function renderCourse(courseId) {
-  if (!courseId) { setHash("#/dashboard"); return render(); }
+  if (!courseId) {
+    setRoute("dashboard");
+    return render();
+  }
 
   appEl.innerHTML = `
     <div class="card">
-      <div class="row" style="justify-content:space-between;align-items:center;">
+      <div class="row">
         <div>
           <div class="h1">Lessons</div>
           <div class="small">Course: <b>${escapeHtml(courseId)}</b></div>
@@ -319,7 +333,7 @@ async function renderCourse(courseId) {
   `;
 
   document.getElementById("backDash").onclick = () => {
-    setHash("#/dashboard");
+    setRoute("dashboard");
     render();
   };
 
@@ -328,79 +342,76 @@ async function renderCourse(courseId) {
     await loadProgress(courseId);
   } catch (e) {
     document.getElementById("lessonsWrap").innerHTML =
-      `<div class="card"><div class="small">Failed to load lessons: ${escapeHtml(e.message)}</div></div>`;
+      `<div class="card"><div class="small">Failed to load lessons/progress: ${escapeHtml(e.message)}</div></div>`;
     return;
   }
 
   const lessons = state.lessonsByCourse[courseId] || [];
-  const byLessonIndex = state.progressByCourse[courseId]?.byLessonIndex || {};
+  const pmap = state.progressByCourse[courseId]?.byLessonIndex || {};
 
   const total = lessons.length;
-  const completed = Object.values(byLessonIndex).filter(x => x?.completed).length;
+  const completed = Object.values(pmap).filter(x => x && x.completed).length;
   const pct = total ? Math.round((completed / total) * 100) : 0;
 
   document.getElementById("courseProgress").innerHTML = `
     <div class="small">Progress: <b>${completed}</b> / ${total} (${pct}%)</div>
-    <div class="progressWrap" style="margin-top:6px;"><div class="progressBar" style="width:${pct}%"></div></div>
+    <div class="progressWrap" style="margin-top:6px;">
+      <div class="progressBar" style="width:${pct}%"></div>
+    </div>
   `;
 
   const wrap = document.getElementById("lessonsWrap");
-
-  const html = lessons
+  wrap.innerHTML = lessons
     .slice()
-    .sort((a, b) => (a.lessonIndex ?? 0) - (b.lessonIndex ?? 0))
+    .sort((a, b) => a.lessonIndex - b.lessonIndex)
     .map(l => {
-      const idx = l.lessonIndex;
-      const done = !!byLessonIndex[idx]?.completed;
+      const done = !!pmap[l.lessonIndex]?.completed;
       return `
         <div class="card">
-          <div class="row" style="justify-content:space-between;align-items:center;">
+          <div class="row">
             <div>
               <div class="h2">${escapeHtml(l.title || "")}</div>
-              <div class="small">Lesson ${Number(idx) + 1} ${done ? "✅" : ""}</div>
+              <div class="small">Lesson ${l.lessonIndex + 1} ${done ? "✅" : ""}</div>
             </div>
-            <button class="btn primary" data-open-lesson="${idx}">Open</button>
+            <button class="btn primary" data-lesson="${l.lessonIndex}">Open</button>
           </div>
         </div>
       `;
-    }).join("");
+    }).join("") || `<div class="card"><div class="small">No lessons found.</div></div>`;
 
-  wrap.innerHTML = html || `<div class="card"><div class="small">No lessons found.</div></div>`;
-
-  wrap.querySelectorAll("[data-open-lesson]").forEach(btn => {
+  wrap.querySelectorAll("[data-lesson]").forEach(btn => {
     btn.onclick = () => {
-      const idx = btn.getAttribute("data-open-lesson");
-      setHash(`#/lesson/${courseId}/${idx}`);
+      const idx = btn.getAttribute("data-lesson");
+      setRoute(`lesson/${courseId}/${idx}`);
       render();
     };
   });
 }
 
-// ---------- LESSON ----------
 async function renderLesson(courseId, lessonIndexStr) {
   const lessonIndex = Number(lessonIndexStr);
   if (!courseId || !Number.isFinite(lessonIndex)) {
-    setHash("#/dashboard");
+    setRoute(`course/${courseId || ""}`);
     return render();
   }
 
   appEl.innerHTML = `
     <div class="card">
-      <div class="row" style="justify-content:space-between;align-items:center;">
+      <div class="row">
         <div>
           <div class="h1">Lesson</div>
           <div class="small">Course: <b>${escapeHtml(courseId)}</b> • Lesson: <b>${lessonIndex + 1}</b></div>
         </div>
         <button class="btn" id="returnCourse">Return</button>
       </div>
-      <div id="lessonProgress" style="margin-top:10px;"></div>
+      <div id="lessonProgressBar" style="margin-top:10px;"></div>
     </div>
 
     <div class="card" id="lessonCard"><div class="small">Loading...</div></div>
   `;
 
   document.getElementById("returnCourse").onclick = () => {
-    setHash(`#/course/${courseId}`);
+    setRoute(`course/${courseId}`);
     render();
   };
 
@@ -409,7 +420,7 @@ async function renderLesson(courseId, lessonIndexStr) {
     await loadProgress(courseId);
   } catch (e) {
     document.getElementById("lessonCard").innerHTML =
-      `<div class="small">Failed to load lesson: ${escapeHtml(e.message)}</div>`;
+      `<div class="small">Failed to load: ${escapeHtml(e.message)}</div>`;
     return;
   }
 
@@ -421,54 +432,54 @@ async function renderLesson(courseId, lessonIndexStr) {
     return;
   }
 
-  const byLessonIndex = state.progressByCourse[courseId]?.byLessonIndex || {};
+  const pmap = state.progressByCourse[courseId]?.byLessonIndex || {};
   const total = lessons.length;
-  const completed = Object.values(byLessonIndex).filter(x => x?.completed).length;
-  const pct = total ? Math.round((completed / total) * 100) : 0;
+  const doneCount = Object.values(pmap).filter(x => x && x.completed).length;
+  const pct = total ? Math.round((doneCount / total) * 100) : 0;
 
-  document.getElementById("lessonProgress").innerHTML = `
-    <div class="small">Course progress: <b>${completed}</b> / ${total} (${pct}%)</div>
-    <div class="progressWrap" style="margin-top:6px;"><div class="progressBar" style="width:${pct}%"></div></div>
+  document.getElementById("lessonProgressBar").innerHTML = `
+    <div class="small">Course progress: <b>${doneCount}</b> / ${total} (${pct}%)</div>
+    <div class="progressWrap" style="margin-top:6px;">
+      <div class="progressBar" style="width:${pct}%"></div>
+    </div>
   `;
 
-  const p = getLessonProgress(courseId, lessonIndex);
-  const hasPrev = lessons.some(x => x.lessonIndex === lessonIndex - 1);
-  const hasNext = lessons.some(x => x.lessonIndex === lessonIndex + 1);
+  const prevExists = lessons.some(x => x.lessonIndex === lessonIndex - 1);
+  const nextExists = lessons.some(x => x.lessonIndex === lessonIndex + 1);
+  const p = progressFor(courseId, lessonIndex);
 
   document.getElementById("lessonCard").innerHTML = `
     <div class="h2">${escapeHtml(lesson.title || "")}</div>
-
     <hr/>
+
     <div class="h2">Learn</div>
     <div class="p">${escapeHtml(lesson.learnText || "")}</div>
 
-    <div style="height:10px"></div>
     <div class="h2">Task</div>
     <div class="p">${escapeHtml(lesson.task || "")}</div>
 
-    <hr/>
     <div class="h2">Reflection</div>
     <textarea id="reflection" placeholder="Write your reflection...">${escapeHtml(p.reflectionText || "")}</textarea>
 
     <div style="height:12px"></div>
-    <div class="row" style="justify-content:flex-start;gap:8px;">
-      <button class="btn" id="prevBtn" ${hasPrev ? "" : "disabled"}>Back</button>
-      <button class="btn" id="nextBtn" ${hasNext ? "" : "disabled"}>Next</button>
-      <button class="btn primary" id="saveBtn">Save & Complete</button>
-    </div>
 
-    <div class="small" id="saveMsg" style="margin-top:10px;"></div>
+    <div class="row" style="justify-content:flex-start; gap:10px;">
+      <button class="btn" id="prevBtn" ${prevExists ? "" : "disabled"}>Back</button>
+      <button class="btn" id="nextBtn" ${nextExists ? "" : "disabled"}>Next</button>
+      <button class="btn primary" id="saveBtn">Save & Complete</button>
+      <span class="small" id="saveMsg"></span>
+    </div>
   `;
 
   document.getElementById("prevBtn").onclick = () => {
-    if (!hasPrev) return;
-    setHash(`#/lesson/${courseId}/${lessonIndex - 1}`);
+    if (!prevExists) return;
+    setRoute(`lesson/${courseId}/${lessonIndex - 1}`);
     render();
   };
 
   document.getElementById("nextBtn").onclick = () => {
-    if (!hasNext) return;
-    setHash(`#/lesson/${courseId}/${lessonIndex + 1}`);
+    if (!nextExists) return;
+    setRoute(`lesson/${courseId}/${lessonIndex + 1}`);
     render();
   };
 
@@ -476,13 +487,17 @@ async function renderLesson(courseId, lessonIndexStr) {
     const msg = document.getElementById("saveMsg");
     msg.textContent = "Saving...";
 
-    const reflection = document.getElementById("reflection").value || "";
-
     try {
       await api("/progress/update", {
         method: "POST",
-        body: { courseId, lessonIndex, reflection, completed: true }
+        body: {
+          courseId,
+          lessonIndex,
+          reflection: document.getElementById("reflection").value || "",
+          completed: true,
+        },
       });
+
       msg.textContent = "Saved ✅";
       await loadProgress(courseId);
     } catch (e) {
@@ -491,13 +506,26 @@ async function renderLesson(courseId, lessonIndexStr) {
   };
 }
 
-// ---------- ROUTER / BOOT ----------
+// ---------------- GLOBAL FUNCTIONS (required by index.html) ----------------
+window.go = function (page) {
+  setRoute(page);
+  render();
+};
+
+window.logout = async function () {
+  try { await api("/auth/logout", { method: "POST" }); } catch {}
+  state.user = null;
+  updateNav();
+  setRoute("login");
+  render();
+};
+
+// ---------------- ROUTER ----------------
 window.addEventListener("hashchange", render);
 
+// ---------------- BOOT ----------------
 (function boot() {
-  // IMPORTANT: force correct nav state immediately
   updateNav();
-
-  if (!location.hash) setHash("#/dashboard");
+  if (!location.hash) setRoute("dashboard");
   render();
 })();
