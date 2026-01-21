@@ -2,11 +2,13 @@
 const express = require("express");
 const PDFDocument = require("pdfkit");
 const { query } = require("../db_pg");
-const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-/** Only allow known courses (optional but safer) */
+function getUserId(req) {
+  return req.session?.user?.id;
+}
+
 function safeCourseId(courseId) {
   const allowed = new Set(["foundation", "growth", "excellence"]);
   return allowed.has(courseId) ? courseId : null;
@@ -31,8 +33,7 @@ async function checkEligibility(userId, courseId) {
     [userId, courseId]
   );
   const passedExam = !!attemptR.rows[0]?.passed;
-  const examScore =
-    typeof attemptR.rows[0]?.score === "number" ? attemptR.rows[0].score : null;
+  const examScore = (typeof attemptR.rows[0]?.score === "number") ? attemptR.rows[0].score : null;
 
   const eligible =
     totalLessons > 0 &&
@@ -42,13 +43,94 @@ async function checkEligibility(userId, courseId) {
   return { eligible, totalLessons, completedLessons, passedExam, examScore };
 }
 
-/**
- * GET /api/certificates
- * List user's certificates
- */
-router.get("/", requireAuth, async (req, res) => {
+// ----------------------
+// GET /api/certificates/status/:courseId
+// (This is what your docs/student/app.js calls)
+// ----------------------
+router.get("/status/:courseId", async (req, res) => {
   try {
-    const userId = req.session.user.id;
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Not logged in" });
+
+    const courseId = safeCourseId(req.params.courseId);
+    if (!courseId) return res.status(400).json({ error: "Invalid courseId" });
+
+    const details = await checkEligibility(userId, courseId);
+
+    const certR = await query(
+      "SELECT id, issued_at FROM certificates WHERE user_id=$1 AND course_id=$2",
+      [userId, courseId]
+    );
+
+    const issued = !!certR.rows.length;
+    const cert = certR.rows[0] || null;
+
+    res.json({
+      courseId,
+      eligible: details.eligible,
+      totalLessons: details.totalLessons,
+      completedLessons: details.completedLessons,
+      examPassed: details.passedExam,
+      examScore: details.examScore,
+      issued,
+      certificate: issued ? { id: cert.id, issuedAt: cert.issued_at } : null,
+      pdfUrl: issued ? `/api/certificates/${courseId}/pdf` : null
+    });
+  } catch (err) {
+    console.error("CERT STATUS ERROR:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ----------------------
+// POST /api/certificates/issue/:courseId
+// (Frontend button uses this)
+// ----------------------
+router.post("/issue/:courseId", async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Not logged in" });
+
+    const courseId = safeCourseId(req.params.courseId);
+    if (!courseId) return res.status(400).json({ error: "Invalid courseId" });
+
+    const details = await checkEligibility(userId, courseId);
+    if (!details.eligible) {
+      return res.status(403).json({ error: "Not eligible yet", details });
+    }
+
+    await query(
+      `INSERT INTO certificates (user_id, course_id)
+       VALUES ($1,$2)
+       ON CONFLICT (user_id, course_id) DO NOTHING`,
+      [userId, courseId]
+    );
+
+    const certR = await query(
+      "SELECT id, issued_at FROM certificates WHERE user_id=$1 AND course_id=$2",
+      [userId, courseId]
+    );
+
+    res.json({
+      ok: true,
+      certificate: certR.rows[0],
+      details,
+      pdfUrl: `/api/certificates/${courseId}/pdf`
+    });
+  } catch (err) {
+    console.error("CERT ISSUE ERROR:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ----------------------
+// GET /api/certificates
+// list user's certificates
+// ----------------------
+router.get("/", async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Not logged in" });
 
     const r = await query(
       `SELECT c.course_id, c.issued_at,
@@ -67,26 +149,20 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /api/certificates/claim
- * Body: { courseId }
- * Creates certificate if eligible (idempotent).
- */
-router.post("/claim", requireAuth, async (req, res) => {
+// ----------------------
+// POST /api/certificates/claim
+// keeps your old endpoint working (idempotent)
+// ----------------------
+router.post("/claim", async (req, res) => {
   try {
-    const userId = req.session.user.id;
-    const courseId = safeCourseId(req.body?.courseId);
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Not logged in" });
 
+    const courseId = safeCourseId(req.body?.courseId);
     if (!courseId) return res.status(400).json({ error: "Invalid courseId" });
 
-    const eligibility = await checkEligibility(userId, courseId);
-
-    if (!eligibility.eligible) {
-      return res.status(403).json({
-        error: "Not eligible yet",
-        details: eligibility
-      });
-    }
+    const details = await checkEligibility(userId, courseId);
+    if (!details.eligible) return res.status(403).json({ error: "Not eligible yet", details });
 
     await query(
       `INSERT INTO certificates (user_id, course_id)
@@ -102,47 +178,43 @@ router.post("/claim", requireAuth, async (req, res) => {
       [userId, courseId]
     );
 
-    res.json({ ok: true, certificate: certR.rows[0], details: eligibility });
+    res.json({ ok: true, certificate: certR.rows[0], details });
   } catch (err) {
     console.error("CERT CLAIM ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-/**
- * GET /api/certificates/:courseId/pdf
- * Downloads a PDF certificate if exists (or if eligible -> auto-create).
- */
-router.get("/:courseId/pdf", requireAuth, async (req, res) => {
+// ----------------------
+// GET /api/certificates/:courseId/pdf
+// downloads PDF (same as you have)
+// ----------------------
+router.get("/:courseId/pdf", async (req, res) => {
   try {
-    const userId = req.session.user.id;
-    const courseId = safeCourseId(req.params.courseId);
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Not logged in" });
 
+    const courseId = safeCourseId(req.params.courseId);
     if (!courseId) return res.status(400).json({ error: "Invalid courseId" });
 
-    // Get user name
     const userR = await query("SELECT name FROM users WHERE id=$1", [userId]);
     if (!userR.rows.length) return res.status(404).json({ error: "User not found" });
     const userName = userR.rows[0].name || "Student";
 
-    // Get course title
     const courseR = await query(
-      "SELECT id, title_en, title_ti FROM courses WHERE id=$1",
+      "SELECT id, title_en FROM courses WHERE id=$1",
       [courseId]
     );
     if (!courseR.rows.length) return res.status(404).json({ error: "Course not found" });
 
-    // Ensure certificate exists (if eligible, auto-create)
     let certR = await query(
       "SELECT issued_at FROM certificates WHERE user_id=$1 AND course_id=$2",
       [userId, courseId]
     );
 
     if (!certR.rows.length) {
-      const eligibility = await checkEligibility(userId, courseId);
-      if (!eligibility.eligible) {
-        return res.status(403).json({ error: "Not eligible yet", details: eligibility });
-      }
+      const details = await checkEligibility(userId, courseId);
+      if (!details.eligible) return res.status(403).json({ error: "Not eligible yet", details });
 
       await query(
         `INSERT INTO certificates (user_id, course_id)
@@ -159,12 +231,8 @@ router.get("/:courseId/pdf", requireAuth, async (req, res) => {
 
     const issuedAt = certR.rows[0].issued_at;
 
-    // ---- PDF output ----
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="certificate-${courseId}.pdf"`
-    );
+    res.setHeader("Content-Disposition", `attachment; filename="certificate-${courseId}.pdf"`);
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     doc.pipe(res);
@@ -187,10 +255,6 @@ router.get("/:courseId/pdf", requireAuth, async (req, res) => {
 
     doc.moveDown(1.5);
     doc.fontSize(12).text(`Issued on: ${new Date(issuedAt).toDateString()}`, { align: "center" });
-
-    doc.moveDown(2.2);
-    doc.fontSize(12).text("Signature: ____________________", { align: "left" });
-    doc.fontSize(12).text("Stamp: _______________________", { align: "left" });
 
     doc.end();
   } catch (err) {
