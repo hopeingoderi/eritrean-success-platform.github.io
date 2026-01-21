@@ -5,36 +5,10 @@ const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-// GET exam definition
-router.get("/:courseId", requireAuth, async (req, res) => {
-  const courseId = req.params.courseId;
-  const lang = (req.query.lang === "ti") ? "ti" : "en";
-
-  const r = await query(
-    "SELECT pass_score, exam_json_en, exam_json_ti FROM exam_defs WHERE course_id=$1",
-    [courseId]
-  );
-  if (!r.rows.length) return res.status(404).json({ error: "Exam not found" });
-
-  const def = r.rows[0];
-  const examJson = JSON.parse(lang === "ti" ? def.exam_json_ti : def.exam_json_en);
-
-  // Return latest attempt too (nice UX)
-  const userId = req.session.user.id;
-  const a = await query(
-    "SELECT score, passed, updated_at FROM exam_attempts WHERE user_id=$1 AND course_id=$2",
-    [userId, courseId]
-  );
-
-  res.json({
-    courseId,
-    passScore: def.pass_score,
-    exam: examJson,
-    latestAttempt: a.rows[0] || null
-  });
-});
-
-// GET attempt/status (used by dashboard/cert)
+/**
+ * ✅ GET exam status (USED BY dashboard/cert)
+ * IMPORTANT: This MUST be ABOVE "/:courseId" route.
+ */
 router.get("/status/:courseId", requireAuth, async (req, res) => {
   const userId = req.session.user.id;
   const courseId = req.params.courseId;
@@ -53,7 +27,41 @@ router.get("/status/:courseId", requireAuth, async (req, res) => {
   });
 });
 
-// POST submit answers -> server calculates score
+/**
+ * ✅ GET exam definition + latest attempt
+ */
+router.get("/:courseId", requireAuth, async (req, res) => {
+  const courseId = req.params.courseId;
+  const lang = (req.query.lang === "ti") ? "ti" : "en";
+  const userId = req.session.user.id;
+
+  const r = await query(
+    "SELECT pass_score, exam_json_en, exam_json_ti FROM exam_defs WHERE course_id=$1",
+    [courseId]
+  );
+  if (!r.rows.length) return res.status(404).json({ error: "Exam not found" });
+
+  const def = r.rows[0];
+  const examJson = JSON.parse(lang === "ti" ? def.exam_json_ti : def.exam_json_en);
+
+  const a = await query(
+    "SELECT score, passed, updated_at FROM exam_attempts WHERE user_id=$1 AND course_id=$2",
+    [userId, courseId]
+  );
+
+  res.json({
+    courseId,
+    passScore: def.pass_score,
+    exam: examJson,
+    latestAttempt: a.rows[0] || null
+  });
+});
+
+/**
+ * ✅ POST submit answers -> server calculates score
+ * POST /api/exams/:courseId/submit
+ * Body: { answers: number[], lang: "en"|"ti" }
+ */
 router.post("/:courseId/submit", requireAuth, async (req, res) => {
   const userId = req.session.user.id;
   const courseId = req.params.courseId;
@@ -62,10 +70,7 @@ router.post("/:courseId/submit", requireAuth, async (req, res) => {
   const lang = (req.body?.lang === "ti") ? "ti" : "en";
 
   if (!Array.isArray(answers) || answers.length === 0) {
-    return res.status(400).json({ error: "Invalid answers" });
-  }
-  if (answers.some(a => !Number.isInteger(a) || a < 0)) {
-    return res.status(400).json({ error: "Invalid answers" });
+    return res.status(400).json({ error: "Invalid answers: answers must be a non-empty array" });
   }
 
   // load exam def
@@ -79,8 +84,37 @@ router.post("/:courseId/submit", requireAuth, async (req, res) => {
   const exam = JSON.parse(lang === "ti" ? defR.rows[0].exam_json_ti : defR.rows[0].exam_json_en);
   const questions = exam?.questions || [];
 
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: "Exam has no questions configured" });
+  }
+
   if (answers.length !== questions.length) {
-    return res.status(400).json({ error: "Invalid answers" });
+    return res.status(400).json({
+      error: "Invalid answers: answers length must match questions length",
+      expected: questions.length,
+      got: answers.length
+    });
+  }
+
+  // validate each answer is integer and within options range
+  for (let i = 0; i < questions.length; i++) {
+    const a = answers[i];
+    const opts = Array.isArray(questions[i]?.options) ? questions[i].options : [];
+
+    if (!Number.isInteger(a)) {
+      return res.status(400).json({ error: `Invalid answers: answer #${i + 1} is not an integer`, index: i, value: a });
+    }
+    if (a < 0) {
+      return res.status(400).json({ error: `Invalid answers: answer #${i + 1} is missing (-1)`, index: i, value: a });
+    }
+    if (opts.length > 0 && a >= opts.length) {
+      return res.status(400).json({
+        error: `Invalid answers: answer #${i + 1} out of range`,
+        index: i,
+        value: a,
+        optionsLength: opts.length
+      });
+    }
   }
 
   // compute score
