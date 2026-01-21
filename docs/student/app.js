@@ -1,19 +1,17 @@
 // docs/student/app.js
 // Student SPA (docs/student)
-// Certificates: eligible ONLY if (all lessons completed) AND (final exam passed)
-// Backend endpoints assumed (based on your current certificates.js PDFKit version):
-//   POST /api/certificates/claim   body: { courseId }
-//   GET  /api/certificates/:courseId/pdf
-// Exams endpoints assumed (based on your exams.js screenshot):
-//   GET  /api/exams/:courseId/attempt
-// Lessons/Progress:
-//   GET  /api/lessons/:courseId?lang=en|ti
-//   GET  /api/progress/course/:courseId
-// Auth:
-//   GET  /api/auth/me
-//   POST /api/auth/login
-//   POST /api/auth/register
-//   POST /api/auth/logout
+// Works with your backend routes:
+// - /api/auth/*
+// - /api/courses
+// - /api/lessons/:courseId
+// - /api/progress/course/:courseId
+// - /api/progress/update
+// - /api/exams/:courseId (GET)
+// - /api/exams/status/:courseId (GET)
+// - /api/exams/:courseId/submit (POST)  body: { answers, lang }
+// - /api/certificates/status/:courseId (GET)
+// - /api/certificates/claim (POST)      body: { courseId }
+// - /api/certificates/:courseId/pdf (GET)
 
 const API_BASE = "https://api.riseeritrea.com/api";
 
@@ -25,8 +23,9 @@ const state = {
   user: null,
   lang: "en", // "en" | "ti"
   courses: [],
-  lessonsByCourse: {},   // courseId -> lessons[]
-  progressByCourse: {},  // courseId -> { byLessonIndex: { [idx]: { completed, reflectionText } } }
+  lessonsByCourse: {},    // courseId -> lessons[]
+  progressByCourse: {},   // courseId -> progress object
+  examStatusByCourse: {}  // courseId -> { passed, score }
 };
 
 // ---------------- HELPERS ----------------
@@ -36,7 +35,6 @@ function escapeHtml(str = "") {
   }[m]));
 }
 
-// better error messages (so you don’t see only “Request failed”)
 async function api(path, { method = "GET", body } = {}) {
   const res = await fetch(API_BASE + path, {
     method,
@@ -44,49 +42,25 @@ async function api(path, { method = "GET", body } = {}) {
     credentials: "include",
     body: body ? JSON.stringify(body) : undefined
   });
-
-  let data = null;
-  const text = await res.text().catch(() => "");
-  try { data = text ? JSON.parse(text) : {}; } catch { data = null; }
-
-  if (!res.ok) {
-    const msg =
-      (data && typeof data.error === "string" && data.error) ||
-      (text && text.slice(0, 160)) ||
-      `Request failed (${res.status})`;
-    throw new Error(msg);
-  }
-
-  return data ?? {};
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Request failed");
+  return data;
 }
 
-function setHash(h) {
-  if (location.hash !== h) location.hash = h;
-}
-function routeParts() {
-  return (location.hash || "#/dashboard").replace("#/", "").split("/");
-}
-function isLoggedIn() {
-  return !!state.user;
-}
+function setHash(h) { if (location.hash !== h) location.hash = h; }
+function routeParts() { return (location.hash || "#/dashboard").replace("#/", "").split("/"); }
+function isLoggedIn() { return !!state.user; }
 
-// courses: fallback order
 function courseFallbackOrder(courseId) {
   return ({ foundation: 1, growth: 2, excellence: 3 }[courseId] || 999);
 }
 
-// UI: course title/desc support both possible DB schemas
 function courseTitle(c) {
-  // Your API returns: title_en/title_ti (and maybe intro_en/intro_ti depending on version)
-  return state.lang === "ti"
-    ? (c.title_ti || c.title_en || "")
-    : (c.title_en || c.title_ti || "");
+  return state.lang === "ti" ? (c.title_ti || c.title_en || "") : (c.title_en || c.title_ti || "");
 }
 function courseDesc(c) {
-  // Support both: description_* OR intro_*
-  const en = c.description_en || c.intro_en || "";
-  const ti = c.description_ti || c.intro_ti || "";
-  return state.lang === "ti" ? (ti || en) : (en || ti);
+  // your DB uses intro_en/intro_ti (not description_*)
+  return state.lang === "ti" ? (c.intro_ti || c.intro_en || "") : (c.intro_en || c.intro_ti || "");
 }
 
 function progressFor(courseId, lessonIndex) {
@@ -94,36 +68,14 @@ function progressFor(courseId, lessonIndex) {
   return p || { completed: false, reflectionText: "" };
 }
 
-// ---------------- NAV VISIBILITY ----------------
-// Supports BOTH:
-// 1) your current index.html inline onclick buttons (no ids)
-// 2) future "button IDs" style (btnLogin/btnRegister/btnLogout)
+// ---------------- NAV ----------------
 function updateNav() {
   if (!navEl) return;
 
-  // Prefer IDs if exist
-  const byIdLogin = document.getElementById("btnLogin");
-  const byIdReg = document.getElementById("btnRegister");
-  const byIdOut = document.getElementById("btnLogout");
-
-  if (byIdLogin || byIdReg || byIdOut) {
-    if (state.user) {
-      if (byIdLogin) byIdLogin.style.display = "none";
-      if (byIdReg) byIdReg.style.display = "none";
-      if (byIdOut) byIdOut.style.display = "inline-block";
-    } else {
-      if (byIdLogin) byIdLogin.style.display = "inline-block";
-      if (byIdReg) byIdReg.style.display = "inline-block";
-      if (byIdOut) byIdOut.style.display = "none";
-    }
-    return;
-  }
-
-  // Fallback: match buttons by label text (works with your current HTML)
   const btns = Array.from(navEl.querySelectorAll("button"));
   const loginBtn = btns.find(b => (b.textContent || "").toLowerCase().includes("login"));
-  const regBtn = btns.find(b => (b.textContent || "").toLowerCase().includes("register"));
-  const outBtn = btns.find(b => (b.textContent || "").toLowerCase().includes("logout"));
+  const regBtn   = btns.find(b => (b.textContent || "").toLowerCase().includes("register"));
+  const outBtn   = btns.find(b => (b.textContent || "").toLowerCase().includes("logout"));
 
   if (state.user) {
     if (loginBtn) loginBtn.style.display = "none";
@@ -136,7 +88,6 @@ function updateNav() {
   }
 }
 
-// ---------------- AUTH ----------------
 async function loadMe() {
   const r = await api("/auth/me");
   state.user = r.user;
@@ -178,40 +129,17 @@ async function loadProgress(courseId) {
   state.progressByCourse[courseId] = r || {};
 }
 
-async function loadExamAttempt(courseId) {
-  // exams.js supports: GET /:courseId/attempt
-  const r = await api(`/exams/${courseId}/attempt`);
-  return r.attempt || null; // { score, passed, updated_at } or null
+async function loadExamStatus(courseId) {
+  const r = await api(`/exams/status/${courseId}`);
+  state.examStatusByCourse[courseId] = r || { passed: false, score: null };
 }
 
-// Certificate “status” computed on frontend (matches your backend routes)
-async function computeCertificateStatus(courseId) {
-  if (!state.lessonsByCourse[courseId]) await loadLessons(courseId);
-  await loadProgress(courseId);
-
-  const lessons = state.lessonsByCourse[courseId] || [];
-  const totalLessons = lessons.length;
-
-  const pmap = state.progressByCourse[courseId]?.byLessonIndex || {};
-  const completedLessons = Object.values(pmap).filter(x => x && x.completed).length;
-
-  const attempt = await loadExamAttempt(courseId);
-  const examPassed = !!attempt?.passed;
-  const examScore = (typeof attempt?.score === "number") ? attempt.score : null;
-
-  const eligible = totalLessons > 0 && completedLessons >= totalLessons && examPassed;
-
-  return { courseId, totalLessons, completedLessons, examPassed, examScore, eligible };
+async function loadCertificateStatus(courseId) {
+  return api(`/certificates/status/${courseId}`);
 }
 
 async function claimCertificate(courseId) {
-  // backend: POST /certificates/claim  body: { courseId }
-  return api("/certificates/claim", { method: "POST", body: { courseId } });
-}
-
-function pdfUrl(courseId) {
-  // backend: GET /certificates/:courseId/pdf
-  return `${API_BASE}/certificates/${encodeURIComponent(courseId)}/pdf`;
+  return api(`/certificates/claim`, { method: "POST", body: { courseId } });
 }
 
 // ---------------- ROUTER ----------------
@@ -234,7 +162,8 @@ async function render() {
   if (page === "dashboard") return renderDashboard();
   if (page === "course") return renderCourse(parts[1]);
   if (page === "lesson") return renderLesson(parts[1], parts[2]);
-  if (page === "cert") return renderCertHub(parts[1]);
+  if (page === "exam") return renderExam(parts[1]);
+  if (page === "cert") return renderCert(parts[1]);
 
   setHash("#/dashboard");
   return renderDashboard();
@@ -358,10 +287,13 @@ async function renderDashboard() {
     <div class="card">
       <div class="h2">${escapeHtml(courseTitle(c))}</div>
       <div class="p">${escapeHtml(courseDesc(c))}</div>
+
       <div class="row" style="justify-content:flex-start; gap:10px;">
         <button class="btn primary" data-open-course="${escapeHtml(c.id)}">Open lessons</button>
+        <button class="btn secondary" data-open-exam="${escapeHtml(c.id)}">Final exam</button>
         <button class="btn" data-open-cert="${escapeHtml(c.id)}">Certificate</button>
       </div>
+
       <div class="small" id="dashMeta_${escapeHtml(c.id)}" style="margin-top:8px;"></div>
     </div>
   `).join("");
@@ -369,22 +301,30 @@ async function renderDashboard() {
   wrap.querySelectorAll("[data-open-course]").forEach(btn => {
     btn.onclick = () => { setHash(`#/course/${btn.getAttribute("data-open-course")}`); render(); };
   });
+  wrap.querySelectorAll("[data-open-exam]").forEach(btn => {
+    btn.onclick = () => { setHash(`#/exam/${btn.getAttribute("data-open-exam")}`); render(); };
+  });
   wrap.querySelectorAll("[data-open-cert]").forEach(btn => {
     btn.onclick = () => { setHash(`#/cert/${btn.getAttribute("data-open-cert")}`); render(); };
   });
 
-  // show meta
+  // Meta: lessons progress + exam passed
   for (const c of state.courses) {
     const metaEl = document.getElementById(`dashMeta_${c.id}`);
     if (!metaEl) continue;
 
     try {
-      const status = await computeCertificateStatus(c.id);
-      metaEl.innerHTML = `
-        Lessons: <b>${status.completedLessons}</b> / ${status.totalLessons}
-        • Exam: <b>${status.examPassed ? "PASSED ✅" : "Not passed"}</b>
-        • Certificate: <b>${status.eligible ? "Unlocked ✅" : "Locked 🔒"}</b>
-      `;
+      await loadLessons(c.id);
+      await loadProgress(c.id);
+      await loadExamStatus(c.id);
+
+      const lessons = state.lessonsByCourse[c.id] || [];
+      const pmap = state.progressByCourse[c.id]?.byLessonIndex || {};
+      const done = Object.values(pmap).filter(x => x && x.completed).length;
+      const total = lessons.length;
+
+      const exam = state.examStatusByCourse[c.id] || {};
+      metaEl.innerHTML = `Lessons: <b>${done}</b> / ${total} • Exam: <b>${exam.passed ? "PASSED ✅" : "Not passed"}</b>`;
     } catch {
       metaEl.textContent = "";
     }
@@ -404,6 +344,7 @@ async function renderCourse(courseId) {
         </div>
         <div class="row" style="gap:8px; justify-content:flex-end;">
           <button class="btn" id="backDash">Back</button>
+          <button class="btn secondary" id="openExam">Final exam</button>
           <button class="btn" id="openCert">Certificate</button>
         </div>
       </div>
@@ -413,6 +354,7 @@ async function renderCourse(courseId) {
   `;
 
   document.getElementById("backDash").onclick = () => { setHash("#/dashboard"); render(); };
+  document.getElementById("openExam").onclick = () => { setHash(`#/exam/${courseId}`); render(); };
   document.getElementById("openCert").onclick = () => { setHash(`#/cert/${courseId}`); render(); };
 
   try {
@@ -480,10 +422,7 @@ async function renderLesson(courseId, lessonIndexStr) {
       <div class="small">Course: <b>${escapeHtml(courseId)}</b> • Lesson: <b>${lessonIndex + 1}</b></div>
       <div id="bars" style="margin-top:10px;"></div>
     </div>
-
-    <div class="card" id="lessonCard">
-      <div class="small">Loading...</div>
-    </div>
+    <div class="card" id="lessonCard"><div class="small">Loading...</div></div>
   `;
 
   try {
@@ -538,10 +477,13 @@ async function renderLesson(courseId, lessonIndexStr) {
       <button class="btn" id="returnBtn">Return</button>
       <button class="btn" id="prevBtn" ${prevExists ? "" : "disabled"}>Back</button>
       <button class="btn primary" id="saveBtn">Save & Complete</button>
-      <button class="btn" id="nextBtn" ${nextExists ? "" : "disabled"}>Next</button>
+      <button class="btn" id="nextBtn" ${(nextExists && p.completed) ? "" : "disabled"}>Next</button>
     </div>
 
     <div class="small" id="saveMsg" style="margin-top:10px;"></div>
+    <div class="lockNote" id="nextNote" style="display:${p.completed ? "none" : "block"};">
+      🔒 “Next” unlocks after you press <b>Save & Complete</b>.
+    </div>
   `;
 
   document.getElementById("returnBtn").onclick = () => { setHash(`#/course/${courseId}`); render(); };
@@ -552,6 +494,8 @@ async function renderLesson(courseId, lessonIndexStr) {
   };
   document.getElementById("nextBtn").onclick = () => {
     if (!nextExists) return;
+    const nowP = progressFor(courseId, lessonIndex);
+    if (!nowP.completed) return; // hard lock
     setHash(`#/lesson/${courseId}/${lessonIndex + 1}`);
     render();
   };
@@ -559,7 +503,6 @@ async function renderLesson(courseId, lessonIndexStr) {
   document.getElementById("saveBtn").onclick = async () => {
     const msg = document.getElementById("saveMsg");
     msg.textContent = "Saving...";
-
     const reflection = document.getElementById("reflection").value || "";
 
     try {
@@ -570,14 +513,125 @@ async function renderLesson(courseId, lessonIndexStr) {
 
       msg.textContent = "Saved ✅";
       await loadProgress(courseId);
+
+      // unlock next
+      const nextBtn = document.getElementById("nextBtn");
+      if (nextExists && nextBtn) nextBtn.disabled = false;
+      const note = document.getElementById("nextNote");
+      if (note) note.style.display = "none";
     } catch (e) {
       msg.textContent = "Save failed: " + e.message;
     }
   };
 }
 
-// ---------------- CERTIFICATE HUB (NO /status ENDPOINT NEEDED) ----------------
-async function renderCertHub(courseId) {
+// ---------------- EXAM ----------------
+async function renderExam(courseId) {
+  if (!courseId) { setHash("#/dashboard"); return render(); }
+
+  appEl.innerHTML = `
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="h1">Final Exam</div>
+          <div class="small">Course: <b>${escapeHtml(courseId)}</b></div>
+        </div>
+        <div class="row" style="gap:8px; justify-content:flex-end;">
+          <button class="btn" id="backCourse">Back</button>
+          <button class="btn" id="goCert">Certificate</button>
+        </div>
+      </div>
+      <div class="small" id="examMeta" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card" id="examCard"><div class="small">Loading exam...</div></div>
+  `;
+
+  document.getElementById("backCourse").onclick = () => { setHash(`#/course/${courseId}`); render(); };
+  document.getElementById("goCert").onclick = () => { setHash(`#/cert/${courseId}`); render(); };
+
+  let examData;
+  try {
+    examData = await api(`/exams/${courseId}?lang=${state.lang}`);
+  } catch (e) {
+    document.getElementById("examCard").innerHTML = `<div class="small">Failed: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const passScore = examData.passScore ?? 70;
+  const questions = examData.exam?.questions || [];
+  const latest = examData.latestAttempt || null;
+
+  document.getElementById("examMeta").innerHTML = `
+    Pass score: <b>${passScore}%</b>
+    ${latest ? ` • Last score: <b>${latest.score}%</b> ${latest.passed ? "✅ PASSED" : "❌"}` : ""}
+  `;
+
+  if (!questions.length) {
+    document.getElementById("examCard").innerHTML = `<div class="small">Exam not configured yet.</div>`;
+    return;
+  }
+
+  const qHtml = questions.map((q, i) => {
+    const opts = (q.options || []).map((opt, oi) => `
+      <label class="quizOption">
+        <input type="radio" name="q_${i}" value="${oi}" />
+        <div><b>${escapeHtml(opt)}</b></div>
+      </label>
+    `).join("");
+
+    return `
+      <div class="card" style="background:rgba(255,255,255,.03)">
+        <div class="h2" style="font-size:16px;">${i + 1}. ${escapeHtml(q.text || "")}</div>
+        <div style="height:8px"></div>
+        ${opts}
+      </div>
+    `;
+  }).join("");
+
+  document.getElementById("examCard").innerHTML = `
+    <div class="small">Answer all questions, then submit.</div>
+    <div style="height:10px"></div>
+    ${qHtml}
+    <button class="btn primary" id="submitExam">Submit Exam</button>
+    <div class="small" id="examMsg" style="margin-top:10px;"></div>
+  `;
+
+  document.getElementById("submitExam").onclick = async () => {
+    const msg = document.getElementById("examMsg");
+    msg.textContent = "Submitting...";
+
+    const answers = [];
+    for (let i = 0; i < questions.length; i++) {
+      const picked = document.querySelector(`input[name="q_${i}"]:checked`);
+      answers[i] = picked ? Number(picked.value) : -1;
+    }
+
+    if (answers.some(x => x < 0)) {
+      msg.textContent = "Please answer all questions before submitting.";
+      return;
+    }
+
+    try {
+      // ✅ Correct route: POST /api/exams/:courseId/submit
+      const r = await api(`/exams/${courseId}/submit`, {
+        method: "POST",
+        body: { answers, lang: state.lang }
+      });
+
+      msg.textContent = r.passed
+        ? `✅ Passed! Score: ${r.score}% (Pass: ${r.passScore}%)`
+        : `❌ Not passed. Score: ${r.score}% (Pass: ${r.passScore}%) — try again.`;
+
+      await loadExamStatus(courseId);
+    } catch (e) {
+      msg.textContent = "Submit failed: " + e.message;
+    }
+  };
+}
+
+// ---------------- CERTIFICATE ----------------
+async function renderCert(courseId) {
   if (!courseId) { setHash("#/dashboard"); return render(); }
 
   appEl.innerHTML = `
@@ -589,71 +643,75 @@ async function renderCertHub(courseId) {
         </div>
         <div class="row" style="gap:8px; justify-content:flex-end;">
           <button class="btn" id="backCourse">Back</button>
+          <button class="btn secondary" id="openExam">Final exam</button>
         </div>
       </div>
-      <div class="small" id="certMsg" style="margin-top:10px;"></div>
+      <div class="small" id="certTop" style="margin-top:10px;"></div>
     </div>
 
-    <div class="card" id="certCard">
-      <div class="small">Loading...</div>
-    </div>
+    <div class="card" id="certCard"><div class="small">Loading...</div></div>
   `;
 
   document.getElementById("backCourse").onclick = () => { setHash(`#/course/${courseId}`); render(); };
+  document.getElementById("openExam").onclick = () => { setHash(`#/exam/${courseId}`); render(); };
 
   let status;
   try {
-    status = await computeCertificateStatus(courseId);
+    status = await loadCertificateStatus(courseId);
   } catch (e) {
     document.getElementById("certCard").innerHTML = `<div class="small">Failed: ${escapeHtml(e.message)}</div>`;
     return;
   }
 
-  document.getElementById("certMsg").innerHTML = `
-    Lessons completed: <b>${status.completedLessons}</b> / ${status.totalLessons}
-    • Exam passed: <b>${status.examPassed ? "YES ✅" : "NO ❌"}</b>
-    ${status.examScore != null ? `• Score: <b>${status.examScore}%</b>` : ""}
-  `;
+  const top = document.getElementById("certTop");
+  top.innerHTML = `Lessons completed: <b>${status.completedLessons}</b> / ${status.totalLessons} • Exam passed: <b>${status.examPassed ? "YES ✅" : "NO ❌"}</b>`;
 
-  // If not eligible yet
-  if (!status.eligible) {
+  if (status.issued) {
     document.getElementById("certCard").innerHTML = `
-      <div class="h2">Not eligible yet 🔒</div>
-      <div class="small" style="margin-top:8px;">
-        To unlock the certificate you must:
-        <div>✅ Complete all lessons</div>
-        <div>✅ Pass the final exam</div>
-      </div>
+      <div class="h2">Certificate issued ✅</div>
+      <div class="small">Download your PDF:</div>
       <div style="height:12px"></div>
-      <div class="small">Once you pass the exam, come back here and click <b>Claim Certificate</b>.</div>
+      <a class="btn primary" href="${API_BASE}/certificates/${courseId}/pdf" target="_blank" rel="noreferrer">
+        Download PDF
+      </a>
     `;
     return;
   }
 
-  // Eligible → allow claim
+  if (!status.eligible) {
+    document.getElementById("certCard").innerHTML = `
+      <div class="h2">Not eligible yet 🔒</div>
+      <div class="small">
+        To unlock the certificate you must:
+        <div>${status.completedLessons >= status.totalLessons ? "✅" : "⬜"} Complete all lessons</div>
+        <div>${status.examPassed ? "✅" : "⬜"} Pass the final exam</div>
+        <div style="margin-top:10px;">Once you pass the exam, come back here and click <b>Claim Certificate</b>.</div>
+      </div>
+      <div style="height:12px"></div>
+      <button class="btn secondary" id="goExamNow">Go to Final Exam</button>
+    `;
+    document.getElementById("goExamNow").onclick = () => { setHash(`#/exam/${courseId}`); render(); };
+    return;
+  }
+
   document.getElementById("certCard").innerHTML = `
-    <div class="h2">Eligible ✅</div>
-    <div class="small">Click below to claim your certificate PDF.</div>
+    <div class="h2">You are eligible ✅</div>
+    <div class="small">Click below to claim your certificate.</div>
     <div style="height:12px"></div>
     <button class="btn primary" id="claimBtn">Claim Certificate</button>
     <div class="small" id="claimMsg" style="margin-top:10px;"></div>
-
-    <div style="height:12px"></div>
-    <a class="btn" href="${pdfUrl(courseId)}" target="_blank" rel="noreferrer">
-      Download PDF (if already claimed)
-    </a>
   `;
 
   document.getElementById("claimBtn").onclick = async () => {
-    const msg = document.getElementById("claimMsg");
-    msg.textContent = "Claiming...";
-
+    const m = document.getElementById("claimMsg");
+    m.textContent = "Claiming...";
     try {
       await claimCertificate(courseId);
-      msg.textContent = "✅ Claimed! Opening PDF...";
-      window.open(pdfUrl(courseId), "_blank");
+      m.textContent = "Claimed ✅ Opening PDF...";
+      window.open(`${API_BASE}/certificates/${courseId}/pdf`, "_blank");
+      setTimeout(() => renderCert(courseId), 400);
     } catch (e) {
-      msg.textContent = "Claim failed: " + e.message;
+      m.textContent = "Failed: " + e.message;
     }
   };
 }
